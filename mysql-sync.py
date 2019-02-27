@@ -8,8 +8,10 @@ import mysql.connector
 import os
 import time
 import yaml
+import sys
 
 logging.basicConfig(level=logging.INFO)
+
 
 def init():
     global source_database
@@ -59,6 +61,7 @@ def init():
     target_port = datadict.get("target").get("port")
     target_user = datadict.get("target").get("user")
     target_pwd = datadict.get("target").get("pwd")
+
 
 # 获取所有表名
 def get_tables(host, port, user, password, database):
@@ -111,6 +114,21 @@ def get_columns_by_tablename(host, port, user, password, database, tablename):
         conn.close()
 
 
+def get_index_by_tablename(host, port, user, password, database, tablename):
+    try:
+        conn = mysql.connector.connect(host=host, port=port, user=user, password=password)
+        cursor = conn.cursor()
+        sql = "SHOW INDEX FROM %s.%s" % (database, tablename)
+        logging.debug(sql)
+        cursor.execute(sql)
+        indexs = cursor.fetchall()
+        return indexs
+    except BaseException:
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
 
 init()
 
@@ -151,9 +169,10 @@ for remove_table in remove_tables:
 # 无法识别字段重命名、顺序变更
 # 以source为准对比target，生成alert语句
 intersection_tables = set(source_tables).intersection(set(target_tables))
+print(intersection_tables)
 for intersection_table in intersection_tables:
     table = intersection_table[0]
-    logging.debug(table)
+    logging.debug('对比column %s' % table)
 
     # 获取表所有字段信息，source/target
     source_columns_table = get_columns_by_tablename(source_host, source_port, source_user, source_pwd, source_database, table)
@@ -217,11 +236,52 @@ for intersection_table in intersection_tables:
             upgrade_sql.append("\n")
 
 
-print('---------')
+# 对比索引
+for intersection_table in intersection_tables:
+    table = intersection_table[0]
+    logging.debug('对比索引 %s' % table)
+
+    # 获取表所有字段信息，source/target
+    source_indexs = get_index_by_tablename(source_host, source_port, source_user, source_pwd, source_database, table)
+    target_indexs = get_index_by_tablename(target_host, target_port, target_user, target_pwd, target_database, table)
+
+    # 转换成字典格式，便于操作
+    source_indexs_dict = {items[2]: items for items in source_indexs}
+    target_indexs_dict = {items[2]: items for items in target_indexs}
+
+    # 不统计主键索引
+    source_indexs_dict.pop('PRIMARY')
+    target_indexs_dict.pop('PRIMARY')
+
+    # print('%s, %s' % (sys._getframe().f_lineno, source_indexs_dict))
+    # print('%s, %s' % (sys._getframe().f_lineno, target_indexs_dict))
+
+    # 删除target_table索引
+    drop_index_sql = {'DROP INDEX %s ON %s' % (idx_name, table) for idx_name in target_indexs_dict.keys()}
+    # print('%s, %s' % (sys._getframe().f_lineno, drop_index_sql))
+    for sql in drop_index_sql:
+        # print(sql + ';')
+        upgrade_sql.append(sql + ';')
+        upgrade_sql.append("\n")
+
+
+    # 创建index语句
+    create_index_sql = {'ALTER TABLE %s ADD %s %s(%s) USING %s %s' % (value[0], 'UNIQUE' if 0==value[1] else 'INDEX', value[2], value[4], value[10], 'comment \''+value[12]+'\'' if len(value[12]) > 0 else '') for key, value in source_indexs_dict.items()}
+    # print('%s, %s' % (sys._getframe().f_lineno, create_index_sql))
+    for sql in create_index_sql:
+        # print(sql + ';')
+        upgrade_sql.append(sql + ';')
+        upgrade_sql.append("\n")
+
+upgrade_sql.insert(0, 'SET FOREIGN_KEY_CHECKS=0;\n\n')
+upgrade_sql.append('\nSET FOREIGN_KEY_CHECKS=1;\n')
+
 with open(upgrade_sql_file, 'w+') as f:
     for sql in upgrade_sql:
         f.write(sql)
 
+
+# SHOW CREATE DATABASE sync1;
 
 # 备份当前数据库
 # source脚本
