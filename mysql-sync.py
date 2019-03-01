@@ -10,7 +10,11 @@ import time
 import yaml
 import sys
 
-logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.DEBUG,filename="config.log",filemode="w",format="%(asctime)s-%(name)s-%(levelname)s-%(message)s")
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s-%(threadName)s-%(name)s-%(levelname)s-%(filename)s-%(funcName)s-%(lineno)d: %(message)s")
 
 
 def init():
